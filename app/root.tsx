@@ -1,5 +1,6 @@
 import {
 	isRouteErrorResponse,
+	Link,
 	Links,
 	Meta,
 	Outlet,
@@ -11,16 +12,8 @@ import type { Route } from "./+types/root";
 import "./app.css";
 
 export const links: Route.LinksFunction = () => [
-	{ rel: "preconnect", href: "https://fonts.googleapis.com" },
-	{
-		rel: "preconnect",
-		href: "https://fonts.gstatic.com",
-		crossOrigin: "anonymous",
-	},
-	{
-		rel: "stylesheet",
-		href: "https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap",
-	},
+	{ rel: "icon", href: "/logo.svg", type: "image/svg+xml" },
+	{ rel: "icon", href: "/favicon.ico", sizes: "48x48" },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -46,15 +39,15 @@ export default function App() {
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
-	let message = "Oops!";
-	let details = "An unexpected error occurred.";
+	let title = "Something went wrong";
+	let details = "This page could not be shown.";
 	let stack: string | undefined;
 
 	if (isRouteErrorResponse(error)) {
-		message = error.status === 404 ? "404" : "Error";
+		title = error.status === 404 ? "Page not found" : "Something went wrong";
 		details =
 			error.status === 404
-				? "The requested page could not be found."
+				? "That page is not on this site."
 				: error.statusText || details;
 	} else if (import.meta.env.DEV && error && error instanceof Error) {
 		details = error.message;
@@ -62,14 +55,23 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
 	}
 
 	return (
-		<main className="pt-16 p-4 container mx-auto">
-			<h1>{message}</h1>
-			<p>{details}</p>
-			{stack && (
-				<pre className="w-full p-4 overflow-x-auto">
-					<code>{stack}</code>
-				</pre>
-			)}
-		</main>
+		<div className="min-h-dvh bg-[#08080a] text-[#ffffff]">
+			<main className="mx-auto max-w-2xl px-4 py-16 sm:px-6">
+				<p className="font-mono text-xs text-[#adadad]">
+					<Link to="/" className="hover:text-white">
+						Abhijith Ganesan
+					</Link>
+				</p>
+				<h1 className="mt-6 font-display text-4xl font-semibold tracking-tight">
+					{title}
+				</h1>
+				<p className="mt-3 text-sm leading-6 text-[#d6d6d6]">{details}</p>
+				{stack && (
+					<pre className="mt-8 overflow-x-auto rounded-lg border border-[#2e2e2e] bg-[#141414] p-4 font-mono text-xs leading-5 text-[#adadad]">
+						<code>{stack}</code>
+					</pre>
+				)}
+			</main>
+		</div>
 	);
 }

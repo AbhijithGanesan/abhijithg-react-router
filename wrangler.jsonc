@@ -1,0 +1,53 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "abhijithg-react-router",
+	"main": "./workers/app.ts",
+	"compatibility_date": "2025-10-08",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+	"vars": {
+		"GOOGLE_HEALTH_SCOPES": "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly https://www.googleapis.com/auth/googlehealth.sleep.readonly"
+	},
+	/**
+	 * Cloudflare KV binding for the Google Health OAuth 2.0 access and refresh
+	 * tokens and the short-lived telemetry cache. The app does not encrypt the
+	 * token values before writing them. Local development uses the local KV
+	 * preview. Production uses the deployed namespace.
+	 *
+	 * Create in production via:
+	 *   npx wrangler kv namespace create FITBIT_KV
+	 *   npx wrangler kv namespace create FITBIT_KV --preview
+	 *
+	 * Required secrets (configure via `npx wrangler secret put <NAME>` or `.dev.vars` locally):
+	 *   - GOOGLE_CLIENT_ID
+	 *   - GOOGLE_CLIENT_SECRET
+	 *   - OAUTH_REDIRECT_URI (optional, defaults to `<origin>/api/fitbit/callback`)
+	 *   - ADMIN_TOKEN (gates the owner-only connect / disconnect / force-refresh routes;
+	 *     if unset, those routes are disabled)
+	 *   - CONTACT_TO (private inbox for the contact form; never commit this)
+	 *   - CONTACT_FROM (sender on the domain onboarded for Email Sending)
+	 */
+	"kv_namespaces": [
+		{
+			"binding": "FITBIT_KV",
+			"id": "47edb47f12bb4cb2987d61e1a104d7eb",
+			"preview_id": "448a244b6a57479db66227c36f6ff490"
+		}
+	],
+	/**
+	 * Sends the contact form. The recipient is the CONTACT_TO secret, not a
+	 * value in this file. CONTACT_FROM must be an address on the domain
+	 * onboarded for Email Sending. `remote: true` makes local development
+	 * send through Cloudflare. FITBIT_KV stays on the local preview.
+	 */
+	"send_email": [
+		{
+			"name": "EMAIL",
+			"remote": true
+		}
+	]
+}
+

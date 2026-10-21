@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="100%" height="100%">
+  <!-- Pure Black Circle Background (No Rims, No Borders) -->
+  <circle cx="100" cy="100" r="100" fill="#000000" />
+  <!-- Pure White Letter 'A' (Geometric Sans) -->
+  <g transform="translate(100, 100) scale(1) translate(-100, -100) translate(0, 0)">
+    <path fill="#FFFFFF" fill-rule="evenodd" d="M 100 42 L 154 156 L 132 156 L 119 126 L 81 126 L 68 156 L 46 156 Z M 100 80 L 113 109 L 87 109 Z"/>
+  </g>
+</svg>

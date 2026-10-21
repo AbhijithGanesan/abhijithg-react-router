@@ -1,13 +1,6 @@
 import { createRequestHandler } from "react-router";
-
-declare module "react-router" {
-	export interface AppLoadContext {
-		cloudflare: {
-			env: Env;
-			ctx: ExecutionContext;
-		};
-	}
-}
+import { handleContactRequest } from "./contact";
+import { handleFitbitRequest } from "./fitbit";
 
 const requestHandler = createRequestHandler(
 	() => import("virtual:react-router/server-build"),
@@ -15,9 +8,20 @@ const requestHandler = createRequestHandler(
 );
 
 export default {
-	fetch(request, env, ctx) {
-		return requestHandler(request, {
-			cloudflare: { env, ctx },
-		});
+	async fetch(request, env) {
+		const url = new URL(request.url);
+		if (
+			url.pathname === "/api/fitbit" ||
+			url.pathname.startsWith("/api/fitbit/")
+		) {
+			return handleFitbitRequest(request, env);
+		}
+		if (url.pathname === "/api/contact") {
+			return handleContactRequest(request, env);
+		}
+
+		return requestHandler(request);
 	},
 } satisfies ExportedHandler<Env>;
+
+
