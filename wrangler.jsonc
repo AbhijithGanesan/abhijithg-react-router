@@ -9,7 +9,8 @@
 	},
 	"upload_source_maps": true,
 	"vars": {
-		"GOOGLE_HEALTH_SCOPES": "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly https://www.googleapis.com/auth/googlehealth.sleep.readonly"
+		"GOOGLE_HEALTH_SCOPES": "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly https://www.googleapis.com/auth/googlehealth.sleep.readonly",
+		"TURNSTILE_HOSTNAMES": "abhijithg.com"
 	},
 	/**
 	 * Cloudflare KV binding for the Google Health OAuth 2.0 access and refresh
@@ -29,6 +30,10 @@
 	 *     if unset, those routes are disabled)
 	 *   - CONTACT_TO (private inbox for the contact form; never commit this)
 	 *   - CONTACT_FROM (sender on the domain onboarded for Email Sending)
+	 *   - TURNSTILE_SECRET (siteverify secret for the contact form)
+	 *
+	 * TURNSTILE_HOSTNAMES is the production allowlist checked against
+	 * siteverify. Local .dev.vars overrides it with localhost,127.0.0.1.
 	 */
 	"kv_namespaces": [
 		{

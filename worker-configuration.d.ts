@@ -11,6 +11,8 @@ interface __BaseEnv_Env {
 	EMAIL: SendEmail;
 	CONTACT_TO: string;
 	CONTACT_FROM: string;
+	TURNSTILE_SECRET: string;
+	TURNSTILE_HOSTNAMES: string;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
@@ -23,7 +25,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "GOOGLE_HEALTH_SCOPES" | "GOOGLE_CLIENT_ID" | "GOOGLE_CLIENT_SECRET" | "OAUTH_REDIRECT_URI" | "ADMIN_TOKEN" | "CONTACT_TO" | "CONTACT_FROM">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "GOOGLE_HEALTH_SCOPES" | "GOOGLE_CLIENT_ID" | "GOOGLE_CLIENT_SECRET" | "OAUTH_REDIRECT_URI" | "ADMIN_TOKEN" | "CONTACT_TO" | "CONTACT_FROM" | "TURNSTILE_SECRET" | "TURNSTILE_HOSTNAMES">> {}
 }
 declare module "*.txt" {
 	const value: string;

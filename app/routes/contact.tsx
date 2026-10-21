@@ -1,5 +1,69 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { LegalDocument } from "../components/LegalDocument";
+
+const TURNSTILE_SITE_KEY = "0x4AAAAAAFfvHfserBAqxjYM";
+const TURNSTILE_SCRIPT_ID = "cf-turnstile-script";
+
+type TurnstileApi = {
+	ready: (callback: () => void) => void;
+	render: (
+		container: HTMLElement,
+		options: {
+			sitekey: string;
+			action: string;
+			theme: "dark";
+			callback: (token: string) => void;
+			"expired-callback": () => void;
+			"error-callback": () => void;
+		},
+	) => string;
+	reset: (widgetId: string) => void;
+	remove: (widgetId: string) => void;
+	getResponse: (widgetId: string) => string | undefined;
+};
+
+declare global {
+	interface Window {
+		turnstile?: TurnstileApi;
+	}
+}
+
+function loadTurnstile(): Promise<TurnstileApi> {
+	if (window.turnstile) {
+		return Promise.resolve(window.turnstile);
+	}
+	return new Promise((resolve, reject) => {
+		const previous = document.getElementById(TURNSTILE_SCRIPT_ID);
+		const script =
+			previous instanceof HTMLScriptElement
+				? previous
+				: document.createElement("script");
+		const finish = () => {
+			const turnstile = window.turnstile;
+			if (!turnstile) {
+				reject(new Error("Turnstile did not load."));
+				return;
+			}
+			resolve(turnstile);
+		};
+		// Turnstile throws if this script is async or defer and ready() is used.
+		script.addEventListener("load", () => {
+			script.dataset.loaded = "true";
+			finish();
+		});
+		script.addEventListener("error", () => {
+			reject(new Error("Turnstile did not load."));
+		});
+		if (!previous) {
+			script.id = TURNSTILE_SCRIPT_ID;
+			script.src =
+				"https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+			document.head.appendChild(script);
+		} else if (script.dataset.loaded === "true" || window.turnstile) {
+			finish();
+		}
+	});
+}
 
 export function meta() {
 	return [
@@ -23,17 +87,82 @@ export default function Contact() {
 		"idle",
 	);
 	const [error, setError] = useState("");
+	const widgetContainerRef = useRef<HTMLDivElement>(null);
+	const widgetIdRef = useRef<string | null>(null);
+	const tokenRef = useRef("");
+
+	useEffect(() => {
+		let removed = false;
+		let widgetId: string | null = null;
+		const container = widgetContainerRef.current;
+		loadTurnstile()
+			.then((turnstile) => {
+				if (removed || !container) return;
+				widgetId = turnstile.render(container, {
+					sitekey: TURNSTILE_SITE_KEY,
+					action: "contact",
+					theme: "dark",
+					callback: (token) => {
+						tokenRef.current = token;
+					},
+					"expired-callback": () => {
+						tokenRef.current = "";
+					},
+					"error-callback": () => {
+						tokenRef.current = "";
+					},
+				});
+				widgetIdRef.current = widgetId;
+			})
+			.catch(() => {
+				if (!removed) {
+					setError("The verification check could not be loaded.");
+				}
+			});
+		return () => {
+			removed = true;
+			if (widgetId && window.turnstile) {
+				window.turnstile.remove(widgetId);
+			}
+			widgetIdRef.current = null;
+			tokenRef.current = "";
+		};
+	}, []);
+
+	function resetTurnstile() {
+		tokenRef.current = "";
+		const widgetId = widgetIdRef.current;
+		if (widgetId && window.turnstile) {
+			window.turnstile.reset(widgetId);
+		}
+	}
 
 	async function handleSubmit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		setStatus("sending");
 		setError("");
+		const turnstileToken =
+			tokenRef.current ||
+			(widgetIdRef.current
+				? window.turnstile?.getResponse(widgetIdRef.current) ?? ""
+				: "");
 
 		try {
+			if (!turnstileToken) {
+				setStatus("error");
+				setError("Complete the verification check and try again.");
+				return;
+			}
 			const response = await fetch("/api/contact", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ name, email, message, company }),
+				body: JSON.stringify({
+					name,
+					email,
+					message,
+					company,
+					"cf-turnstile-response": turnstileToken,
+				}),
 			});
 			const body = (await response.json()) as { ok?: boolean; error?: string };
 			if (!response.ok || !body.ok) {
@@ -48,6 +177,8 @@ export default function Contact() {
 		} catch {
 			setStatus("error");
 			setError("The message could not be sent. Please try again later.");
+		} finally {
+			resetTurnstile();
 		}
 	}
 
@@ -120,6 +251,7 @@ export default function Contact() {
 							className={fieldClassName}
 						/>
 					</div>
+					<div ref={widgetContainerRef} />
 					{status === "error" ? (
 						<p className="text-sm text-[#f1707b]" role="alert">
 							{error}

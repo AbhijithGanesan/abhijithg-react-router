@@ -2,6 +2,7 @@ const COOLDOWN_SECONDS = 10 * 60;
 const MAX_NAME = 100;
 const MAX_EMAIL = 200;
 const MAX_MESSAGE = 4000;
+const CONTACT_ACTION = "contact";
 
 function json(body: unknown, status = 200): Response {
 	return Response.json(body, {
@@ -22,6 +23,77 @@ function clean(value: unknown, max: number, keepNewlines = false): string {
 
 function isEmail(value: string): boolean {
 	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function turnstileHostnames(env: Env): Set<string> {
+	return new Set(
+		(env.TURNSTILE_HOSTNAMES ?? "")
+			.split(",")
+			.map((hostname) => hostname.trim())
+			.filter(Boolean),
+	);
+}
+
+function turnstileRejected(): Response {
+	return json(
+		{ error: "Complete the verification check and try again." },
+		403,
+	);
+}
+
+async function verifyTurnstile(
+	request: Request,
+	token: unknown,
+	env: Env,
+): Promise<Response | null> {
+	const expectedHostnames = turnstileHostnames(env);
+	if (
+		typeof token !== "string" ||
+		token.length === 0 ||
+		token.length > 2048 ||
+		expectedHostnames.size === 0 ||
+		!env.TURNSTILE_SECRET
+	) {
+		return turnstileRejected();
+	}
+
+	const clientIp = request.headers.get("CF-Connecting-IP") ?? "";
+	let result: { success?: boolean; action?: string; hostname?: string };
+	try {
+		const response = await fetch(
+			"https://challenges.cloudflare.com/turnstile/v0/siteverify",
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/x-www-form-urlencoded" },
+				signal: AbortSignal.timeout(10_000),
+				body: new URLSearchParams({
+					secret: env.TURNSTILE_SECRET,
+					response: token,
+					remoteip: clientIp,
+				}),
+			},
+		);
+		if (!response.ok) {
+			return turnstileRejected();
+		}
+		result = (await response.json()) as {
+			success?: boolean;
+			action?: string;
+			hostname?: string;
+		};
+	} catch {
+		return turnstileRejected();
+	}
+
+	if (
+		result.success !== true ||
+		result.action !== CONTACT_ACTION ||
+		typeof result.hostname !== "string" ||
+		!expectedHostnames.has(result.hostname)
+	) {
+		return turnstileRejected();
+	}
+	return null;
 }
 
 async function sha256(value: string): Promise<string> {
@@ -57,6 +129,14 @@ export async function handleContactRequest(
 	}
 
 	const record = body as Record<string, unknown>;
+	const denied = await verifyTurnstile(
+		request,
+		record["cf-turnstile-response"],
+		env,
+	);
+	if (denied) {
+		return denied;
+	}
 	if (typeof record.company === "string" && record.company.trim() !== "") {
 		return json({ ok: true });
 	}
