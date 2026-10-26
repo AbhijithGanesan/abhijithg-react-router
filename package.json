@@ -5,19 +5,19 @@
 		"isbot": "^5.2.2",
 		"react": "^19.3.1",
 		"react-dom": "^19.3.1",
-		"react-router": "^8.4.0"
+		"react-router": "^8.5.0"
 	},
 	"devDependencies": {
-		"@cloudflare/vite-plugin": "^1.64.0",
-		"@react-router/dev": "^8.4.0",
+		"@cloudflare/vite-plugin": "^1.65.0",
+		"@react-router/dev": "^8.5.0",
 		"@tailwindcss/vite": "^4.3.3",
 		"@types/node": "^26.6.5",
 		"@types/react": "^19.3.0",
 		"@types/react-dom": "^19.3.0",
 		"tailwindcss": "^4.3.3",
 		"typescript": "^7.0.2",
-		"vite": "^8.3.4",
-		"wrangler": "^4.151.3"
+		"vite": "^8.3.5",
+		"wrangler": "^4.153.0"
 	},
 	"private": true,
 	"scripts": {
@@ -30,5 +30,10 @@
 		"preview": "npm run build && vite preview",
 		"typecheck": "npm run cf-typegen && tsc -b"
 	},
-	"type": "module"
+	"type": "module",
+	"allowScripts": {
+		"esbuild@0.28.2": true,
+		"workerd@1.20261019.1": true,
+		"workerd@1.20261023.1": true
+	}
 }
