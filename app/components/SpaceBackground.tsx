@@ -106,12 +106,21 @@ export function SpaceBackground() {
 			};
 		});
 
-		let width = window.innerWidth;
-		let height = window.innerHeight;
+		let width = 0;
+		let height = 0;
 
 		const drawStaticStarfield = () => {
-			width = window.innerWidth;
-			height = window.innerHeight;
+			// Size to the svh-locked container. window.innerHeight follows the
+			// dynamic viewport and would repaint the stars.
+			const box = starCanvas.parentElement;
+			if (!box) return;
+			const nextWidth = box.clientWidth;
+			const nextHeight = box.clientHeight;
+			if (nextWidth < 1 || nextHeight < 1) return;
+			if (nextWidth === width && nextHeight === height) return;
+
+			width = nextWidth;
+			height = nextHeight;
 			const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
 			starCanvas.width = Math.floor(width * dpr);
@@ -146,6 +155,15 @@ export function SpaceBackground() {
 		};
 
 		drawStaticStarfield();
+
+		// Repaint only when the svh box itself changes (rotation, real resize).
+		// Browser chrome can resize window.innerHeight without changing this
+		// container, so a window resize listener would jump the stars.
+		const box = starCanvas.parentElement;
+		const resizeObserver = new ResizeObserver(() => {
+			drawStaticStarfield();
+		});
+		if (box) resizeObserver.observe(box);
 
 		const reducedMotionQuery = window.matchMedia(
 			"(prefers-reduced-motion: reduce)",
@@ -246,24 +264,20 @@ export function SpaceBackground() {
 
 		startAmbientTimers();
 
-		window.addEventListener("resize", drawStaticStarfield, { passive: true });
 		reducedMotionQuery.addEventListener("change", handleMotionChange);
 
 		return () => {
 			stopAmbientTimers();
-			window.removeEventListener("resize", drawStaticStarfield);
+			resizeObserver.disconnect();
 			reducedMotionQuery.removeEventListener("change", handleMotionChange);
 		};
 	}, []);
 
 	return (
-		<div
-			aria-hidden="true"
-			className="pointer-events-none fixed inset-0 z-0 overflow-hidden [contain:strict]"
-		>
+		<div aria-hidden="true" className="space-background">
 			<canvas
 				ref={starfieldCanvasRef}
-				className=" block h-full w-full"
+				className="block h-full w-full"
 			/>
 			<canvas
 				ref={cometCanvasRef}

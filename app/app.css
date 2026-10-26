@@ -17,8 +17,24 @@ html {
 }
 
 body {
-	@apply bg-transparent text-[#ffffff] antialiased selection:bg-[#0f6cbd]/40 selection:text-white;
+	@apply bg-[#08080a] text-[#ffffff] antialiased selection:bg-[#0f6cbd]/40 selection:text-white;
 	min-height: 100dvh;
+}
+
+/* Small viewport height stays fixed when the browser chrome shows or hides.
+   100vh is declared first so browsers that do not understand svh keep the fallback. */
+.space-background {
+	position: fixed;
+	top: 0;
+	left: 0;
+	z-index: 0;
+	width: 100%;
+	height: 100vh; /* fallback */
+	height: 100svh;
+	overflow: hidden;
+	contain: strict;
+	pointer-events: none;
+	background-color: #08080a;
 }
 
 /* Bounded GPU-cached blur blocks when the weather flyout is expanded.
