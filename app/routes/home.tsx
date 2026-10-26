@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import type { Route } from "./+types/home";
 import { EdinburghStatus } from "../components/EdinburghStatus";
@@ -147,8 +147,65 @@ export function meta({}: Route.MetaArgs) {
 	];
 }
 
+function useHideHeaderOnScroll() {
+	const [hidden, setHidden] = useState(false);
+
+	useEffect(() => {
+		let lastY = window.scrollY;
+		let accumulated = 0;
+		let frame = 0;
+		let hiddenNow = false;
+
+		const setBarHidden = (next: boolean) => {
+			if (hiddenNow === next) return;
+			hiddenNow = next;
+			setHidden(next);
+		};
+
+		const update = () => {
+			frame = 0;
+			if (document.documentElement.dataset.weatherExpanded === "true") {
+				accumulated = 0;
+				lastY = window.scrollY;
+				setBarHidden(false);
+				return;
+			}
+
+			const y = window.scrollY;
+			const delta = y - lastY;
+			lastY = y;
+
+			if (y <= 8) {
+				accumulated = 0;
+				setBarHidden(false);
+				return;
+			}
+
+			if (delta === 0) return;
+			if (Math.sign(delta) !== Math.sign(accumulated)) accumulated = 0;
+			accumulated += delta;
+			if (accumulated > 24) setBarHidden(true);
+			else if (accumulated < -24) setBarHidden(false);
+		};
+
+		const onScroll = () => {
+			if (frame !== 0) return;
+			frame = window.requestAnimationFrame(update);
+		};
+
+		window.addEventListener("scroll", onScroll, { passive: true });
+		return () => {
+			window.removeEventListener("scroll", onScroll);
+			if (frame !== 0) window.cancelAnimationFrame(frame);
+		};
+	}, []);
+
+	return hidden;
+}
+
 export default function Home() {
 	useFastWheelSmoothScroll();
+	const headerHidden = useHideHeaderOnScroll();
 
 	return (
 		<div className="relative min-h-dvh text-[#ffffff]">
@@ -156,7 +213,12 @@ export default function Home() {
 			<SpaceBackground />
 
 			{/* 2. Top Header / Edinburgh Live Status Bar (Fluent 2 Surface) */}
-			<header className="sticky top-0 z-40 mx-auto w-full max-w-5xl px-4 pt-4 sm:px-6">
+			<header
+				inert={headerHidden ? true : undefined}
+				className={`sticky top-0 z-40 mx-auto w-full max-w-5xl px-4 pt-4 transition-transform duration-300 ease-out motion-reduce:transition-none sm:px-6 ${
+					headerHidden ? "-translate-y-full" : "translate-y-0"
+				}`}
+			>
 				<EdinburghStatus />
 			</header>
 
