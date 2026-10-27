@@ -9,12 +9,18 @@
  */
 
 export interface FitbitLiveStats {
-	steps: number;
-	stepsGoal: number;
+	steps: number | null;
+	stepsGoal: number | null;
 	restingHeartRate: number | null;
+	/** London civil date (YYYY-MM-DD) of restingHeartRate, when that value exists. */
+	restingHeartRateDate: string | null;
+	/** True when today's resting heart rate is missing and an earlier day is shown. */
+	restingHeartRateFromPreviousDay: boolean;
 	latestHeartRateBpm?: number | null;
 	latestHeartRateTime?: string | null;
 	sleepScore: number | null;
+	/** True when sleepScore was calculated here because Google did not send one. */
+	sleepScoreEstimated: boolean;
 	sleepDurationMinutes: number | null;
 	sleepEfficiency?: number | null;
 	sleepDeepMinutes?: number | null;
@@ -75,7 +81,13 @@ interface StoredOAuthTokens {
 }
 
 const KV_TOKEN_KEY = "google_health_oauth_tokens_v2";
-const KV_STATS_CACHE_KEY = "google_health_stats_cache_v7";
+// v4 has no step-goal field. The card uses the device default so the
+// progress line can show a day that goes past 10,000. v9 replaces v8,
+// which stored stepsGoal as null.
+const DAILY_STEPS_GOAL = 10_000;
+const KV_STATS_CACHE_KEY = "google_health_stats_cache_v9";
+const PUBLIC_HEALTH_ERROR = "Google Health could not be read.";
+const PUBLIC_LIVE_HEART_RATE_ERROR = "Live heart rate could not be read.";
 const STATS_CACHE_TTL_SECONDS = 120; // Cache live telemetry for 2 minutes
 const KV_LIVE_HR_CACHE_KEY = "google_health_live_hr_cache_v1";
 const LIVE_HR_CACHE_FRESH_MS = 30_000; // Serve cached live heart rate for 30 seconds
@@ -123,6 +135,16 @@ async function kvPut(
 		return;
 	}
 	memoryStore.set(key, value);
+}
+
+function statsSyncMs(raw: string | null): number {
+	if (!raw) return 0;
+	try {
+		const parsed = Date.parse(JSON.parse(raw).lastSync);
+		return Number.isFinite(parsed) ? parsed : 0;
+	} catch {
+		return 0;
+	}
 }
 
 async function kvDelete(env: Env, key: string): Promise<void> {
@@ -317,9 +339,11 @@ async function refreshAccessToken(
 
 	if (!response.ok) {
 		const errText = await response.text();
-		throw new Error(
-			`Google OAuth token refresh failed (${response.status}): ${errText}`,
+		console.error(
+			`Google OAuth token refresh failed (${response.status})`,
+			errText,
 		);
+		throw new Error(PUBLIC_HEALTH_ERROR);
 	}
 
 	const data = (await response.json()) as {
@@ -698,6 +722,42 @@ export function pointsNewestFirst(
 		.map((entry) => entry.point);
 }
 
+function pickDailyRestingHeartRate(
+	points: GoogleHealthDataPoint[],
+	today: { year: number; month: number; day: number },
+): {
+	bpm: number | null;
+	date: string | null;
+	fromPreviousDay: boolean;
+} {
+	const todayKey = formatCivilDate(today);
+	let previous: { bpm: number; date: string } | null = null;
+
+	for (const point of pointsNewestFirst(points)) {
+		const bpm = Number(
+			point.dailyRestingHeartRate?.beatsPerMinute ??
+				point.dailyRestingHeartRate?.restingHeartRateBpm ??
+				NaN,
+		);
+		if (!Number.isFinite(bpm) || bpm <= 30 || bpm >= 220) continue;
+		const civil = parseCivilDate(point.dailyRestingHeartRate?.date);
+		if (!civil) continue;
+		const date = formatCivilDate(civil);
+		const rounded = Math.round(bpm);
+		if (date === todayKey) {
+			return { bpm: rounded, date, fromPreviousDay: false };
+		}
+		if (!previous && date < todayKey) {
+			previous = { bpm: rounded, date };
+		}
+	}
+
+	if (previous) {
+		return { bpm: previous.bpm, date: previous.date, fromPreviousDay: true };
+	}
+	return { bpm: null, date: null, fromPreviousDay: false };
+}
+
 export function summarizeHeartRateSamples(points: GoogleHealthDataPoint[]): {
 	latestBpm: number | null;
 	latestTime: string | null;
@@ -733,43 +793,64 @@ export function summarizeHeartRateSamples(points: GoogleHealthDataPoint[]): {
  * server-aggregated daily totals (such as `total-calories`, `active-energy-burned`,
  * and `steps`) over civil calendar days.
  */
+interface SeriesResult<T> {
+	points: T[];
+	ok: boolean;
+	status: number;
+	errorText?: string;
+}
+
+function seriesSucceeded(status: number): boolean {
+	return status >= 200 && status < 300;
+}
+
 async function queryGoogleHealthDailyRollUp(
 	accessToken: string,
 	dataType: string,
 	startDate: { year: number; month: number; day: number },
 	endDate: { year: number; month: number; day: number },
-): Promise<GoogleHealthRollUpPoint[]> {
-	const res = await fetch(
-		`${GOOGLE_HEALTH_API_BASE}/${dataType}/dataPoints:dailyRollUp`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${accessToken}`,
-				"Content-Type": "application/json",
-				Accept: "application/json",
-			},
-			body: JSON.stringify({
-				range: {
-					start: {
-						date: startDate,
-						time: { hours: 0, minutes: 0, seconds: 0, nanos: 0 },
-					},
-					end: {
-						date: endDate,
-						time: { hours: 0, minutes: 0, seconds: 0, nanos: 0 },
-					},
+): Promise<SeriesResult<GoogleHealthRollUpPoint>> {
+	try {
+		const res = await fetch(
+			`${GOOGLE_HEALTH_API_BASE}/${dataType}/dataPoints:dailyRollUp`,
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${accessToken}`,
+					"Content-Type": "application/json",
+					Accept: "application/json",
 				},
-				windowSizeDays: 1,
-			}),
-		},
-	);
+				body: JSON.stringify({
+					range: {
+						start: {
+							date: startDate,
+							time: { hours: 0, minutes: 0, seconds: 0, nanos: 0 },
+						},
+						end: {
+							date: endDate,
+							time: { hours: 0, minutes: 0, seconds: 0, nanos: 0 },
+						},
+					},
+					windowSizeDays: 1,
+				}),
+			},
+		);
 
-	if (!res.ok) {
-		return [];
+		if (!res.ok) {
+			const errorText = await res.text().catch(() => "");
+			return { points: [], ok: false, status: res.status, errorText };
+		}
+
+		const data = (await res.json()) as GoogleHealthRollUpResponse;
+		return {
+			points: data.rollupDataPoints ?? [],
+			ok: true,
+			status: res.status,
+		};
+	} catch (error) {
+		console.error(`Google Health daily rollup ${dataType} request failed`, error);
+		return { points: [], ok: false, status: 0 };
 	}
-
-	const data = (await res.json()) as GoogleHealthRollUpResponse;
-	return data.rollupDataPoints ?? [];
 }
 
 interface GoogleHealthQueryOptions {
@@ -857,7 +938,7 @@ async function queryGoogleHealthDataType(
 export async function fetchGoogleHealthTelemetry(
 	accessToken: string,
 	now = new Date(),
-): Promise<FitbitLiveStats> {
+): Promise<{ stats: FitbitLiveStats; cacheable: boolean }> {
 	const {
 		londonHour,
 		todayCivilDate,
@@ -951,78 +1032,99 @@ export async function fetchGoogleHealthTelemetry(
 		),
 	]);
 
-	// Surface API enablement or permission errors clearly if the primary query failed with 401/403
-	if (
-		rhrResult.points.length === 0 &&
-		(rhrResult.status === 401 || rhrResult.status === 403)
-	) {
-		throw new Error(
-			`Google Health API returned ${rhrResult.status}: ${rhrResult.errorText || "Ensure the Google Health API (health.googleapis.com) is enabled in Google Cloud Console and re-authorize with the googlehealth.* scopes."}`,
+	const series = [
+		["steps", stepsRollup],
+		["total calories", totalCaloriesRollup],
+		["active calories", activeCaloriesRollup],
+		["resting heart rate", rhrResult],
+		["heart rate", hrSamplesResult],
+		["sleep", sleepResult],
+		["heart rate variability", hrvResult],
+		["breathing rate", respResult],
+		["breathing rate stages", respSummaryResult],
+		["blood oxygen", spo2Result],
+		["skin temperature", skinTempResult],
+	] as const;
+	for (const [name, result] of series) {
+		if (seriesSucceeded(result.status)) continue;
+		console.error(
+			`Google Health ${name} failed (${result.status})`,
+			result.errorText ?? "",
 		);
+	}
+
+	// A rejected token should not be cached as an empty day.
+	if (rhrResult.status === 401 || rhrResult.status === 403) {
+		throw new Error(PUBLIC_HEALTH_ERROR);
 	}
 
 	// Determine the active civil date for daily activity counters (steps, totalCalories, activeCalories).
 	// Between 00:00 and 03:59 London time, if no steps have been synced for the new calendar day yet,
 	// keep displaying the completed day's totals so late-night checks don't reset to BMR-only at midnight.
-	const todayStepsEntry = stepsRollup.find((p) =>
-		matchesCivilDate(p.civilStartTime?.date, todayCivilDate),
-	);
+	const todayStepsEntry = stepsRollup.ok
+		? stepsRollup.points.find((p) =>
+				matchesCivilDate(p.civilStartTime?.date, todayCivilDate),
+			)
+		: undefined;
 	const todayStepsCount = Number(todayStepsEntry?.steps?.countSum ?? 0);
 	const activeActivityDate =
-		todayStepsCount > 0 || londonHour >= 4
+		!stepsRollup.ok || todayStepsCount > 0 || londonHour >= 4
 			? todayCivilDate
 			: yesterdayCivilDate;
 
-	// 1. Extract Steps for the active day
-	const matchedStepsRollup = stepsRollup.find((p) =>
-		matchesCivilDate(p.civilStartTime?.date, activeActivityDate),
-	);
-	const steps = Number(matchedStepsRollup?.steps?.countSum ?? 0);
+	// 1. Extract Steps for the active day. A failed rollup stays missing rather than zero.
+	let steps: number | null = null;
+	if (stepsRollup.ok) {
+		const matchedStepsRollup = stepsRollup.points.find((p) =>
+			matchesCivilDate(p.civilStartTime?.date, activeActivityDate),
+		);
+		const count = Number(matchedStepsRollup?.steps?.countSum ?? 0);
+		steps = Number.isFinite(count) && count >= 0 ? Math.round(count) : null;
+	}
 
 	// 2. Extract Total Calories & Active Energy Burned for the active day
-	const matchedTotalCalories = totalCaloriesRollup.find((p) =>
-		matchesCivilDate(p.civilStartTime?.date, activeActivityDate),
-	);
-	const rawTotalKcal = Number(
-		matchedTotalCalories?.totalCalories?.kcalSum ?? 0,
-	);
-	const totalCalories =
-		Number.isFinite(rawTotalKcal) && rawTotalKcal > 0
-			? Math.round(rawTotalKcal)
-			: null;
-
-	const matchedActiveCalories = activeCaloriesRollup.find((p) =>
-		matchesCivilDate(p.civilStartTime?.date, activeActivityDate),
-	);
-	const rawActiveKcal = Number(
-		matchedActiveCalories?.activeEnergyBurned?.kcalSum ?? 0,
-	);
-	const activeCalories =
-		Number.isFinite(rawActiveKcal) && rawActiveKcal >= 0
-			? Math.round(rawActiveKcal)
-			: null;
-
-	// 3. Newest resting heart rate, then the newest heart-rate sample by timestamp.
-	let restingHeartRate: number | null = null;
-	for (const point of pointsNewestFirst(rhrResult.points)) {
-		const bpm = Number(
-			point.dailyRestingHeartRate?.beatsPerMinute ??
-				point.dailyRestingHeartRate?.restingHeartRateBpm ??
-				0,
+	let totalCalories: number | null = null;
+	if (totalCaloriesRollup.ok) {
+		const matchedTotalCalories = totalCaloriesRollup.points.find((p) =>
+			matchesCivilDate(p.civilStartTime?.date, activeActivityDate),
 		);
-		if (Number.isFinite(bpm) && bpm > 30 && bpm < 220) {
-			restingHeartRate = Math.round(bpm);
-			break;
+		const rawTotalKcal = Number(
+			matchedTotalCalories?.totalCalories?.kcalSum ?? 0,
+		);
+		if (Number.isFinite(rawTotalKcal) && rawTotalKcal > 0) {
+			totalCalories = Math.round(rawTotalKcal);
 		}
 	}
 
-	const heartRateSummary = summarizeHeartRateSamples(hrSamplesResult.points);
+	let activeCalories: number | null = null;
+	if (activeCaloriesRollup.ok) {
+		const matchedActiveCalories = activeCaloriesRollup.points.find((p) =>
+			matchesCivilDate(p.civilStartTime?.date, activeActivityDate),
+		);
+		const rawActiveKcal = Number(
+			matchedActiveCalories?.activeEnergyBurned?.kcalSum ?? 0,
+		);
+		if (Number.isFinite(rawActiveKcal) && rawActiveKcal >= 0) {
+			activeCalories = Math.round(rawActiveKcal);
+		}
+	}
+
+	// 3. Today's resting heart rate, or the newest earlier civil day.
+	const restingHeartRatePick = seriesSucceeded(rhrResult.status)
+		? pickDailyRestingHeartRate(rhrResult.points, todayCivilDate)
+		: { bpm: null, date: null, fromPreviousDay: false };
+	const restingHeartRate = restingHeartRatePick.bpm;
+
+	const heartRateSummary = seriesSucceeded(hrSamplesResult.status)
+		? summarizeHeartRateSamples(hrSamplesResult.points)
+		: {
+				latestBpm: null,
+				latestTime: null,
+				minBpm: null,
+				maxBpm: null,
+			};
 	const latestHeartRateBpm = heartRateSummary.latestBpm;
 	const latestHeartRateTime = heartRateSummary.latestTime;
-
-	if (restingHeartRate === null && heartRateSummary.minBpm !== null) {
-		restingHeartRate = heartRateSummary.minBpm;
-	}
 
 	// 4. Extract latest Daily Heart Rate Variability (RMSSD ms & non-REM sleeping HR)
 	let hrvRmssd: number | null = null;
@@ -1141,6 +1243,7 @@ export async function fetchGoogleHealthTelemetry(
 	let sleepStartTime: string | null = null;
 	let sleepEndTime: string | null = null;
 	let sleepScore: number | null = null;
+	let sleepScoreEstimated = false;
 
 	const sleepPoints = pointsNewestFirst(sleepResult.points);
 	if (sleepPoints.length > 0) {
@@ -1290,45 +1393,54 @@ export async function fetchGoogleHealthTelemetry(
 				100,
 				Math.round(timeAsleepPts + stagePts + restorationPts),
 			);
+			sleepScoreEstimated = true;
 		}
 	}
 
+	const cacheable = series.every(([, result]) => seriesSucceeded(result.status));
+
 	return {
-		steps: Math.round(steps),
-		stepsGoal: 10000,
-		restingHeartRate,
-		latestHeartRateBpm,
-		latestHeartRateTime,
-		sleepScore,
-		sleepDurationMinutes,
-		sleepEfficiency,
-		sleepDeepMinutes,
-		sleepRemMinutes,
-		sleepLightMinutes,
-		sleepAwakeMinutes,
-		sleepInBedMinutes,
-		sleepRestlessnessPercent,
-		sleepShortAwakeningsCount,
-		sleepStartTime,
-		sleepEndTime,
-		breathingRate,
-		breathingRateDeep,
-		breathingRateLight,
-		breathingRateRem,
-		breathingRateFull,
-		bloodOxygen,
-		bloodOxygenMin,
-		bloodOxygenMax,
-		hrvRmssd,
-		hrvDeepRmssd,
-		skinTempDeltaCelsius,
-		skinTempNightlyCelsius,
-		skinTempBaselineCelsius,
-		totalCalories,
-		activeCalories,
-		lastSync: now.toISOString(),
-		deviceLabel: "Fitbit Air · Google Health API",
-		apiSource: "google-health-api",
+		cacheable,
+		stats: {
+			steps,
+			stepsGoal: DAILY_STEPS_GOAL,
+			restingHeartRate,
+			restingHeartRateDate: restingHeartRatePick.date,
+			restingHeartRateFromPreviousDay: restingHeartRatePick.fromPreviousDay,
+			latestHeartRateBpm,
+			latestHeartRateTime,
+			sleepScore,
+			sleepScoreEstimated,
+			sleepDurationMinutes,
+			sleepEfficiency,
+			sleepDeepMinutes,
+			sleepRemMinutes,
+			sleepLightMinutes,
+			sleepAwakeMinutes,
+			sleepInBedMinutes,
+			sleepRestlessnessPercent,
+			sleepShortAwakeningsCount,
+			sleepStartTime,
+			sleepEndTime,
+			breathingRate,
+			breathingRateDeep,
+			breathingRateLight,
+			breathingRateRem,
+			breathingRateFull,
+			bloodOxygen,
+			bloodOxygenMin,
+			bloodOxygenMax,
+			hrvRmssd,
+			hrvDeepRmssd,
+			skinTempDeltaCelsius,
+			skinTempNightlyCelsius,
+			skinTempBaselineCelsius,
+			totalCalories,
+			activeCalories,
+			lastSync: now.toISOString(),
+			deviceLabel: "Fitbit Air · Google Health API",
+			apiSource: "google-health-api",
+		},
 	};
 }
 
@@ -1347,6 +1459,22 @@ async function fetchLatestHeartRate(
 		filter: `heart_rate.sample_time.physical_time >= "${lookbackIso}"`,
 		pageSize: HEART_RATE_PAGE_SIZE,
 	});
+	if (!seriesSucceeded(hrResult.status)) {
+		console.error(
+			`Google Health live heart rate failed (${hrResult.status})`,
+			hrResult.errorText ?? "",
+		);
+		return {
+			ok: false,
+			bpm: null,
+			sampleTime: null,
+			recentMinBpm: null,
+			recentMaxBpm: null,
+			fetchedAt: new Date().toISOString(),
+			error: PUBLIC_LIVE_HEART_RATE_ERROR,
+		};
+	}
+
 	const summary = summarizeHeartRateSamples(hrResult.points);
 	const bpm = summary.latestBpm;
 	const sampleTime = summary.latestTime;
@@ -1493,9 +1621,13 @@ export async function handleFitbitRequest(
 
 		if (!tokenRes.ok) {
 			const errBody = await tokenRes.text();
+			console.error(
+				`Google OAuth code exchange failed (${tokenRes.status})`,
+				errBody,
+			);
 			return new Response(
-				`Failed to exchange authorization code: ${errBody}`,
-				{ status: 502 },
+				"Google did not accept the sign-in. Start again from the connect link.",
+				{ status: 502, headers: { "Cache-Control": "no-store" } },
 			);
 		}
 
@@ -1590,15 +1722,14 @@ export async function handleFitbitRequest(
 				tokens = await refreshAccessToken(tokens, env);
 			}
 			const hrPayload = await fetchLatestHeartRate(tokens.access_token);
-			await writeLiveHeartRateCache(env, hrPayload);
+			if (!hrPayload.error) {
+				await writeLiveHeartRateCache(env, hrPayload);
+			}
 			return Response.json(hrPayload satisfies FitbitLiveHeartRateResponse, {
 				headers: { "Cache-Control": "no-store" },
 			});
 		} catch (error) {
-			const message =
-				error instanceof Error
-					? error.message
-					: "Unable to query live heart rate.";
+			console.error("Google Health live heart rate failed", error);
 			return Response.json(
 				{
 					ok: false,
@@ -1607,7 +1738,7 @@ export async function handleFitbitRequest(
 					recentMinBpm: null,
 					recentMaxBpm: null,
 					fetchedAt: new Date().toISOString(),
-					error: message,
+					error: PUBLIC_LIVE_HEART_RATE_ERROR,
 				} satisfies FitbitLiveHeartRateResponse,
 				{
 					status: 200,
@@ -1657,7 +1788,9 @@ export async function handleFitbitRequest(
 							stats: cachedStats,
 						} satisfies FitbitApiResponse,
 						{
-							headers: { "Cache-Control": "private, max-age=60" },
+							// A max-age here let the browser reuse an older step
+							// count after a newer read had already been shown.
+							headers: { "Cache-Control": "no-store" },
 						},
 					);
 				} catch {
@@ -1674,13 +1807,27 @@ export async function handleFitbitRequest(
 				tokens = await refreshAccessToken(tokens, env);
 			}
 
-			const liveStats = await fetchGoogleHealthTelemetry(tokens.access_token);
-			await kvPut(
-				env,
-				KV_STATS_CACHE_KEY,
-				JSON.stringify(liveStats),
-				STATS_CACHE_TTL_SECONDS,
+			const { stats: liveStats, cacheable } = await fetchGoogleHealthTelemetry(
+				tokens.access_token,
 			);
+			const existingSyncMs = statsSyncMs(
+				await kvGet(env, KV_STATS_CACHE_KEY),
+			);
+			const liveSyncMs = Date.parse(liveStats.lastSync);
+			const liveIsCurrent =
+				!Number.isFinite(liveSyncMs) || liveSyncMs >= existingSyncMs;
+			if (liveIsCurrent && cacheable) {
+				await kvPut(
+					env,
+					KV_STATS_CACHE_KEY,
+					JSON.stringify(liveStats),
+					STATS_CACHE_TTL_SECONDS,
+				);
+			} else if (liveIsCurrent) {
+				// A partial read must not leave the previous snapshot in place,
+				// or the next load shows that older, lower step count.
+				await kvDelete(env, KV_STATS_CACHE_KEY);
+			}
 
 			return Response.json(
 				{
@@ -1695,10 +1842,7 @@ export async function handleFitbitRequest(
 				},
 			);
 		} catch (error) {
-			const message =
-				error instanceof Error
-					? error.message
-					: "Unable to fetch Google Health telemetry.";
+			console.error("Google Health telemetry failed", error);
 
 			return Response.json(
 				{
@@ -1707,7 +1851,7 @@ export async function handleFitbitRequest(
 					authUrl: "/api/fitbit/auth",
 					apiNotice,
 					stats: null,
-					error: message,
+					error: PUBLIC_HEALTH_ERROR,
 				} satisfies FitbitApiResponse,
 				{
 					status: 200,

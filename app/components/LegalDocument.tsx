@@ -5,10 +5,12 @@ export function LegalDocument({
 	title,
 	children,
 	dated = true,
+	date = "1 October 2026",
 }: {
 	title: string;
 	children: ReactNode;
 	dated?: boolean;
+	date?: string;
 }) {
 	return (
 		<div className="min-h-dvh bg-[#08080a] text-[#ffffff]">
@@ -22,7 +24,7 @@ export function LegalDocument({
 					{title}
 				</h1>
 				{dated ? (
-					<p className="mt-2 text-sm text-[#adadad]">1 October 2026</p>
+					<p className="mt-2 text-sm text-[#adadad]">{date}</p>
 				) : null}
 				<div className="mt-8 space-y-8 text-sm leading-6 text-[#d6d6d6]">
 					{children}

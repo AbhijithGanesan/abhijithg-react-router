@@ -162,6 +162,16 @@ export async function handleContactRequest(
 	}
 
 	try {
+		await env.FITBIT_KV.put(rateKey, "1", { expirationTtl: COOLDOWN_SECONDS });
+	} catch (error) {
+		console.error("Contact rate limit was not saved", error);
+		return json(
+			{ error: "The message could not be sent. Please try again later." },
+			503,
+		);
+	}
+
+	try {
 		await env.EMAIL.send({
 			to: env.CONTACT_TO,
 			from: env.CONTACT_FROM,
@@ -171,16 +181,16 @@ export async function handleContactRequest(
 		});
 	} catch (error) {
 		console.error("Contact form send failed", error);
+		try {
+			await env.FITBIT_KV.delete(rateKey);
+		} catch (deleteError) {
+			console.error("Contact rate limit was not cleared", deleteError);
+		}
 		return json(
 			{ error: "The message could not be sent. Please try again later." },
 			502,
 		);
 	}
 
-	try {
-		await env.FITBIT_KV.put(rateKey, "1", { expirationTtl: COOLDOWN_SECONDS });
-	} catch (error) {
-		console.error("Contact rate limit was not saved", error);
-	}
 	return json({ ok: true });
 }

@@ -69,7 +69,10 @@ A lightweight, dark-space personal portfolio and biometric telemetry hub built o
    ADMIN_TOKEN="a-long-random-string"
    CONTACT_TO="your-private-inbox@example.com"
    CONTACT_FROM="noreply@your-domain.com"
+   TURNSTILE_SECRET="your-turnstile-secret"
+   TURNSTILE_HOSTNAMES="localhost,127.0.0.1"
    ```
+   `TURNSTILE_HOSTNAMES` in `.dev.vars` overrides the production allowlist in `wrangler.jsonc`. `FITBIT_KV` also stores the contact-form rate-limit markers. The binding name is historical.
 4. For production deployment, upload your secrets to Cloudflare Workers:
    ```bash
    npx wrangler secret put GOOGLE_CLIENT_ID
@@ -78,6 +81,7 @@ A lightweight, dark-space personal portfolio and biometric telemetry hub built o
    npx wrangler secret put ADMIN_TOKEN
    npx wrangler secret put CONTACT_TO
    npx wrangler secret put CONTACT_FROM
+   npx wrangler secret put TURNSTILE_SECRET
    ```
    Generate a strong `ADMIN_TOKEN` with e.g.
    `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
@@ -103,7 +107,7 @@ Cloudflare setup, on the account that owns the site domain:
 
 6. Deploy with `npm run deploy`. The `EMAIL` binding is already in `wrangler.jsonc` and does not contain an address. `remote: true` on that binding makes `npm run dev` send a real message through Cloudflare. `FITBIT_KV` stays on the local preview.
 
-Sending to a verified destination address is free. Messages are not stored. A hashed connection address is kept for about 10 minutes so the form cannot be submitted continuously. The form does not send until both secrets exist and the domain has been onboarded.
+Sending to a verified destination address is free. Messages are not stored. A hashed connection address is kept for about 10 minutes so the form cannot be submitted continuously. The form also requires `TURNSTILE_SECRET`. Without it, every submission is rejected. The widget on `/contact` uses the site key in `app/routes/contact.tsx`. Production checks the hostname against `TURNSTILE_HOSTNAMES` in `wrangler.jsonc` (`abhijithg.com`). Local `.dev.vars` should set that variable to `localhost,127.0.0.1`. The form does not send until the mail secrets, the Turnstile secret, and the domain onboarding are all in place.
 
 ### 5. Complete the One-Time Authorization Flow
 

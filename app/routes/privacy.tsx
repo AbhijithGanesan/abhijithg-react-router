@@ -14,7 +14,7 @@ export function meta() {
 
 export default function PrivacyPolicy() {
 	return (
-		<LegalDocument title="Privacy policy">
+		<LegalDocument title="Privacy policy" date="1 October 2026">
 			<LegalSection heading="This site">
 				<p>
 					This is the personal website of Abhijith Ganesan. Visitors are not
@@ -108,10 +108,12 @@ export default function PrivacyPolicy() {
 						contact page
 					</Link>{" "}
 					sends a name, email address, and message to the site owner by email.
-					The owner’s address is not published. The site does not keep the
-					message. It does keep a short-lived marker, for about 10 minutes, so
-					the same visitor cannot send messages continuously. That marker is a
-					hash of the connection address, not the message itself.
+					The owner’s address is not published. Before a message is accepted,
+					Cloudflare Turnstile checks that a person sent it. That check receives
+					the connection address. The site does not keep the message. It does
+					keep a short-lived marker, for about 10 minutes, so the same visitor
+					cannot send messages continuously. That marker is a hash of the
+					connection address, not the message itself.
 				</p>
 			</LegalSection>
 		</LegalDocument>

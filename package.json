@@ -1,6 +1,6 @@
 {
 	"name": "abhijithg-react-router",
-	"description": "Build a full-stack web application with React Router 8.",
+	"description": "Personal site of Abhijith Ganesan.",
 	"dependencies": {
 		"isbot": "^5.2.2",
 		"react": "^19.3.1",

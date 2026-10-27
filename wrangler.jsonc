@@ -2,6 +2,14 @@
 	"$schema": "./node_modules/wrangler/config-schema.json",
 	"name": "abhijithg-react-router",
 	"main": "./workers/app.ts",
+	// The site is served by the custom domains below. workers.dev and its
+	// preview hostnames stay off so the account subdomain is not a second copy.
+	"workers_dev": false,
+	"preview_urls": false,
+	"routes": [
+		{ "pattern": "abhijithg.com", "custom_domain": true },
+		{ "pattern": "www.abhijithg.com", "custom_domain": true }
+	],
 	"compatibility_date": "2025-10-08",
 	"compatibility_flags": ["nodejs_compat"],
 	"observability": {
@@ -14,9 +22,10 @@
 	},
 	/**
 	 * Cloudflare KV binding for the Google Health OAuth 2.0 access and refresh
-	 * tokens and the short-lived telemetry cache. The app does not encrypt the
-	 * token values before writing them. Local development uses the local KV
-	 * preview. Production uses the deployed namespace.
+	 * tokens, the short-lived telemetry cache, and the contact-form rate-limit
+	 * markers (`contact_rate_*`). The binding name is historical. The app does
+	 * not encrypt the token values before writing them. Local development uses
+	 * the local KV preview. Production uses the deployed namespace.
 	 *
 	 * Create in production via:
 	 *   npx wrangler kv namespace create FITBIT_KV

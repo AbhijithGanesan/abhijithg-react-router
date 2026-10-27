@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import type {
 	FitbitApiResponse,
 	FitbitLiveHeartRateResponse,
@@ -9,9 +10,12 @@ const SAMPLE_TELEMETRY: FitbitLiveStats = {
 	steps: 8420,
 	stepsGoal: 10000,
 	restingHeartRate: 58,
+	restingHeartRateDate: null,
+	restingHeartRateFromPreviousDay: false,
 	latestHeartRateBpm: 66,
 	latestHeartRateTime: new Date().toISOString(),
 	sleepScore: 86,
+	sleepScoreEstimated: false,
 	sleepDurationMinutes: 531, // 8h 51m
 	sleepEfficiency: 96,
 	sleepDeepMinutes: 118,
@@ -103,6 +107,40 @@ function formatRelativeSampleAge(isoString: string | null | undefined): string {
 	}
 }
 
+const CIVIL_DAY_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+	day: "numeric",
+	month: "short",
+	timeZone: "UTC",
+});
+
+function formatCivilDay(isoDate: string): string {
+	const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
+	if (!match) return isoDate;
+	const year = Number(match[1]);
+	const month = Number(match[2]);
+	const day = Number(match[3]);
+	return CIVIL_DAY_FORMATTER.format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+function restingHeartRateCaption(stats: FitbitLiveStats): string {
+	if (stats.restingHeartRate == null) return "Resting baseline";
+	if (!stats.restingHeartRateFromPreviousDay) return "Today's resting baseline";
+	return stats.restingHeartRateDate
+		? `From ${formatCivilDay(stats.restingHeartRateDate)}`
+		: "From a previous day";
+}
+
+function sleepScoreCaption(stats: FitbitLiveStats): string {
+	if (stats.sleepScoreEstimated) {
+		return stats.sleepEfficiency
+			? `Estimated · ${stats.sleepEfficiency}% efficiency`
+			: "Estimated from the night's stages";
+	}
+	return stats.sleepEfficiency
+		? `${stats.sleepEfficiency}% sleep efficiency`
+		: "Last recorded night";
+}
+
 function formatTempDelta(delta: number | null): string {
 	if (delta === null || !Number.isFinite(delta)) return "--";
 	const sign = delta >= 0 ? "+" : "";
@@ -110,6 +148,9 @@ function formatTempDelta(delta: number | null): string {
 }
 
 export function FitbitSection() {
+	const navigate = useNavigate();
+	const [searchParams] = useSearchParams();
+	const [connectNotice, setConnectNotice] = useState<string | null>(null);
 	const sectionRef = useRef<HTMLElement | null>(null);
 	const headerRef = useRef<HTMLDivElement | null>(null);
 	const syncRef = useRef<HTMLDivElement | null>(null);
@@ -125,6 +166,30 @@ export function FitbitSection() {
 	const [liveHrLoading, setLiveHrLoading] = useState(false);
 	const [showSleepDetails, setShowSleepDetails] = useState(false);
 	const [showBreathingDetails, setShowBreathingDetails] = useState(false);
+
+	useEffect(() => {
+		const connected = searchParams.get("fitbit") === "connected";
+		const oauthError = searchParams.get("fitbit_error");
+		if (!connected && !oauthError) return;
+		setConnectNotice(
+			connected
+				? "Google Health is connected. The summary will load with the next read."
+				: oauthError === "access_denied"
+					? "The Google sign-in was cancelled."
+					: "The Google sign-in did not finish.",
+		);
+		const next = new URLSearchParams(searchParams);
+		next.delete("fitbit");
+		next.delete("fitbit_error");
+		const search = next.toString();
+		navigate(
+			{
+				search: search ? `?${search}` : "",
+				hash: window.location.hash.replace(/^#/, ""),
+			},
+			{ replace: true, preventScrollReset: true },
+		);
+	}, [navigate, searchParams]);
 
 	const fetchLiveHeartRate = useCallback(async () => {
 		setLiveHrLoading(true);
@@ -167,6 +232,7 @@ export function FitbitSection() {
 				: "/api/fitbit";
 			const response = await fetch(endpoint, {
 				headers: { Accept: "application/json" },
+				cache: "no-store",
 			});
 			if (!response.ok) {
 				throw new Error(`HTTP ${response.status}`);
@@ -249,14 +315,27 @@ export function FitbitSection() {
 		return () => observer.disconnect();
 	}, [activeStats]);
 
-	const stepsProgressPercent = activeStats
-		? Math.min(
-				100,
-				Math.round(
-					(activeStats.steps / Math.max(1, activeStats.stepsGoal)) * 100,
-				),
-			)
-		: 0;
+	const stepsProgressPercent =
+		activeStats?.steps != null &&
+		activeStats.stepsGoal != null &&
+		activeStats.stepsGoal > 0
+			? Math.floor((activeStats.steps / activeStats.stepsGoal) * 100)
+			: null;
+	// Each bar stays inside the track. Gold is progress up to the goal.
+	// Red above it is the next goal, through 200%. Pink above the red is
+	// everything past 200%, and it fills the track at 300%.
+	const stepsBarWidth =
+		stepsProgressPercent === null ? null : Math.min(stepsProgressPercent, 100);
+	const stepsRedWidth =
+		stepsProgressPercent !== null && stepsProgressPercent > 100
+			? Math.min(stepsProgressPercent - 100, 100)
+			: null;
+	const stepsPinkWidth =
+		stepsProgressPercent !== null && stepsProgressPercent > 200
+			? Math.min(stepsProgressPercent - 200, 100)
+			: null;
+	const stepsPastDoubleGoal =
+		stepsProgressPercent !== null && stepsProgressPercent >= 200;
 
 	const isCheckingConnection = loading || (data === null && !fetchFailed);
 
@@ -303,7 +382,7 @@ export function FitbitSection() {
 							className={syncOnOwnLine ? "text-left" : "text-right"}
 						>
 							<div className="text-[11px] font-medium uppercase tracking-wider text-[#adadad]">
-								Last synced
+								Updated
 							</div>
 							<div className="mt-0.5 font-mono text-xs font-semibold text-[#d6d6d6] tabular-nums">
 								{formatSyncTimestamp(activeStats.lastSync)} UK
@@ -311,6 +390,12 @@ export function FitbitSection() {
 						</div>
 					)}
 				</div>
+
+				{connectNotice ? (
+					<p className="mt-4 text-sm text-[#d6d6d6]" role="status">
+						{connectNotice}
+					</p>
+				) : null}
 
 				{/* Fallback UI when live stats are unavailable (Fluent 2 Secondary Surface #1f1f1f).
 				    Connecting an account is an owner-only action, so no Connect button is shown here. */}
@@ -359,24 +444,57 @@ export function FitbitSection() {
 							<div>
 								<div className="flex items-center justify-between text-xs font-medium text-[#adadad]">
 									<span>Steps today</span>
-									<span className="font-mono text-xs font-semibold text-[#f5c542]">
-										{stepsProgressPercent}%
-									</span>
+									{stepsProgressPercent !== null ? (
+										<span
+											className={`font-mono text-xs font-semibold ${
+												stepsProgressPercent > 100
+													? stepsPastDoubleGoal
+														? "text-[#f472b6]"
+														: "text-[#f87171]"
+													: "text-[#f5c542]"
+											}`}
+										>
+											{stepsProgressPercent}%
+										</span>
+									) : null}
 								</div>
 								<div className="mt-1.5 font-mono text-xl font-semibold text-[#ffffff] tabular-nums sm:text-2xl">
-									{activeStats.steps.toLocaleString("en-GB")}
+									{activeStats.steps == null
+										? "--"
+										: activeStats.steps.toLocaleString("en-GB")}
 								</div>
 							</div>
 							<div>
-								{/* Fluent 2 ProgressBar */}
-								<div className="mt-2.5 h-1 w-full overflow-hidden rounded-full bg-[#333333]">
-									<div
-										style={{ width: `${stepsProgressPercent}%` }}
-										className="h-full rounded-full bg-[#e6b325]"
-									/>
-								</div>
+								{stepsBarWidth !== null ? (
+									<div className="mt-2.5 flex flex-col gap-0.5">
+										{stepsPinkWidth !== null ? (
+											<div className="h-1 w-full overflow-hidden rounded-full bg-[#333333]">
+												<div
+													style={{ width: `${stepsPinkWidth}%` }}
+													className="h-full rounded-full bg-[#f472b6]"
+												/>
+											</div>
+										) : null}
+										{stepsRedWidth !== null ? (
+											<div className="h-1 w-full overflow-hidden rounded-full bg-[#333333]">
+												<div
+													style={{ width: `${stepsRedWidth}%` }}
+													className="h-full rounded-full bg-[#f87171]"
+												/>
+											</div>
+										) : null}
+										<div className="h-1 w-full overflow-hidden rounded-full bg-[#333333]">
+											<div
+												style={{ width: `${stepsBarWidth}%` }}
+												className="h-full rounded-full bg-[#e6b325]"
+											/>
+										</div>
+									</div>
+								) : null}
 								<div className="mt-1.5 text-[11px] text-[#adadad]">
-									Goal: {activeStats.stepsGoal.toLocaleString("en-GB")} steps
+									{activeStats.stepsGoal != null
+										? `Goal: ${activeStats.stepsGoal.toLocaleString("en-GB")} steps`
+										: "Daily goal isn't available"}
 								</div>
 							</div>
 						</div>
@@ -416,7 +534,7 @@ export function FitbitSection() {
 									</div>
 								</div>
 								<div className="mt-2.5 flex items-center justify-between text-[11px] text-[#adadad]">
-									<span>24-hour resting baseline</span>
+									<span>{restingHeartRateCaption(activeStats)}</span>
 									<span className="text-[#479ef5]">Live HR</span>
 								</div>
 							</div>
@@ -513,11 +631,7 @@ export function FitbitSection() {
 									</div>
 								</div>
 								<div className="mt-2.5 flex items-center justify-between text-[11px] text-[#adadad]">
-									<span>
-										{activeStats.sleepEfficiency
-											? `${activeStats.sleepEfficiency}% sleep efficiency`
-											: "Last recorded night"}
-									</span>
+									<span>{sleepScoreCaption(activeStats)}</span>
 									<span className="text-[#479ef5]">Details</span>
 								</div>
 							</div>
